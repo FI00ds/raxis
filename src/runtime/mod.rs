@@ -36,9 +36,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use windows::Win32::Foundation::COLORREF;
 use windows::Win32::Graphics::Dwm::{
-    DWM_BB_ENABLE, DWM_BLURBEHIND, DWM_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW, DWMSBT_NONE,
+    DWM_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW, DWMSBT_NONE,
     DWMSBT_TABBEDWINDOW, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
-    DWMWA_USE_IMMERSIVE_DARK_MODE, DwmDefWindowProc, DwmEnableBlurBehindWindow,
+    DWMWA_USE_IMMERSIVE_DARK_MODE, DwmDefWindowProc,
     DwmExtendFrameIntoClientArea, DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, FillRect, HDC};
@@ -66,7 +66,7 @@ use windows::{
                 CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
                 DispatchMessageW, GWLP_USERDATA, GetClientRect, GetMessageW, GetSystemMetrics,
                 IDC_ARROW, LoadCursorW, MSG, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER,
-                SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
+                SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
                 WM_CHAR, WM_DESTROY, WM_DISPLAYCHANGE, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
                 WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
                 WM_MBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WNDCLASSEXW,
@@ -425,7 +425,7 @@ impl<
 
             // Create window first without user data
             let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default() | WS_EX_NOREDIRECTIONBITMAP,
+                WS_EX_NOREDIRECTIONBITMAP,
                 class_name,
                 PCWSTR(
                     title
@@ -485,19 +485,13 @@ impl<
                 size_of::<DWM_SYSTEMBACKDROP_TYPE>() as _,
             );
 
+            blur_background(hwnd);
+
             // Check if backdrop setting succeeded
             let backdrop_supported = backdrop_result.is_ok();
 
-            if backdrop_supported && !matches!(backdrop, Backdrop::None) {
-                let bb = DWM_BLURBEHIND {
-                    dwFlags: DWM_BB_ENABLE,
-                    fEnable: true.into(),
-                    ..Default::default()
-                };
-                DwmEnableBlurBehindWindow(hwnd, &bb).ok();
-            }
-
-            if replace_titlebar {
+            // if backdrop is not supported then replacing the titlebar leads to a bland grey bg rather than the blurred bg
+            if replace_titlebar && backdrop_supported {
                 REPLACE_TITLEBAR.store(true, Ordering::Relaxed);
 
                 let margins = MARGINS {
@@ -594,4 +588,56 @@ impl<
         }
         Ok(())
     }
+}
+
+
+
+fn blur_background(hwnd: HWND) -> bool {
+    use core::ffi::c_void;
+
+    #[allow(clippy::upper_case_acronyms)]
+    type WINDOWCOMPOSITIONATTRIB = u32;
+    const WCA_ACCENT_POLICY: WINDOWCOMPOSITIONATTRIB = 19;
+    const ACCENT_ENABLE_BLURBEHIND : WINDOWCOMPOSITIONATTRIB = 3;
+
+    // https://vhanla.codigobit.info/2015/07/enable-windows-10-aero-glass-aka-blur.html
+    #[allow(non_snake_case)]
+    #[allow(clippy::upper_case_acronyms)]
+    #[repr(C)]
+    #[derive(Default)]
+    struct AccentPolicy {
+        AccentState: u32,
+        AccentFlags: u32,
+        GradientColor: u32,
+        AnimationId: u32
+    }
+
+    #[allow(non_snake_case)]
+    #[allow(clippy::upper_case_acronyms)]
+    #[repr(C)]
+    struct WINDOWCOMPOSITIONATTRIBDATA {
+        Attrib: WINDOWCOMPOSITIONATTRIB,
+        pvData: *mut c_void,
+        cbData: usize,
+    }
+    #[link(name = "user32.dll", kind = "raw-dylib", modifiers = "+verbatim")]
+    unsafe extern "system" {
+        #[link_ordinal(2386)]
+        pub fn SetWindowCompositionAttribute(_: HWND, _: *mut WINDOWCOMPOSITIONATTRIBDATA) -> BOOL;
+    }
+
+    let mut accent_policy = AccentPolicy {
+        AccentState: ACCENT_ENABLE_BLURBEHIND,
+        ..Default::default()
+    };
+
+    let mut attrib_data = WINDOWCOMPOSITIONATTRIBDATA {
+        Attrib: WCA_ACCENT_POLICY,
+        pvData: &mut accent_policy as *mut _ as _,
+        cbData: std::mem::size_of_val(&accent_policy)
+    };
+
+    let status = unsafe {SetWindowCompositionAttribute(hwnd, &mut attrib_data)};
+
+    bool::from(status)
 }

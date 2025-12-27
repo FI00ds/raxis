@@ -12,7 +12,7 @@ pub fn state_mut_from_hwnd<State, Message>(
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
         use log::warn;
-        
+
         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
 
         if ptr != 0 {
